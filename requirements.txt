@@ -1,4 +1,8 @@
 flask
+flask-cors
+textblob
 scikit-learn
 numpy
+scipy
+joblib
 gunicorn

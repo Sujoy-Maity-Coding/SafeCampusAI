@@ -1,16 +1,20 @@
 from flask import Flask, request, jsonify
+from flask_cors import CORS
+from textblob import TextBlob
+
 import pickle
-import re
 import random
+import re
 
 app = Flask(__name__)
+CORS(app)
 
-# Load models
-category_model = pickle.load(
+# LOAD TRAINED MODELS
+model = pickle.load(
     open("category_model.pkl", "rb")
 )
 
-priority_model = pickle.load(
+modelPriority = pickle.load(
     open("priority_model.pkl", "rb")
 )
 
@@ -18,60 +22,186 @@ tfidf = pickle.load(
     open("tfidf.pkl", "rb")
 )
 
-# Clean text
+# CLEAN TEXT
 def clean_text(text):
 
     text = text.lower()
 
-    text = re.sub(r'[^a-zA-Z\\s]', '', text)
+    text = re.sub(
+        r'[^a-zA-Z\s]',
+        '',
+        text
+    )
 
     return text
 
 
-@app.route("/predict", methods=["POST"])
-def predict():
+# EMOTION + AUTHENTICITY DETECTION
+def detect_emotion_and_authenticity(text):
 
-    data = request.json
+    blob = TextBlob(text)
 
-    complaint = data["text"]
+    polarity = blob.sentiment.polarity
 
-    clean = clean_text(complaint)
+    # EMOTION DETECTION
+    if polarity < -0.5:
 
-    vector = tfidf.transform([clean])
+        emotion = "Fear/Panic"
 
-    # Predict category
-    category = category_model.predict(vector)[0]
+    elif polarity < 0:
 
-    # Predict priority
-    priority = priority_model.predict(vector)[0]
+        emotion = "Stress"
 
-    # Dynamic risk score
-    if priority == "Critical":
-        risk_score = random.randint(91, 100)
+    elif polarity > 0.5:
 
-    elif priority == "High":
-        risk_score = random.randint(71, 90)
-
-    elif priority == "Medium":
-        risk_score = random.randint(31, 70)
+        emotion = "Neutral"
 
     else:
-        risk_score = random.randint(1, 30)
 
-    return jsonify({
+        emotion = "Concern"
 
-        "category": category,
+    # DANGER WORDS
+    danger_words = [
 
-        "priority": priority,
+        "help",
+        "attack",
+        "threat",
+        "harass",
+        "ragging",
+        "beating",
+        "unsafe",
+        "violence",
+        "abuse",
+        "panic",
+        "fight",
+        "blood"
+    ]
 
-        "risk_score": risk_score
-    })
+    score = 0
+
+    for word in danger_words:
+
+        if word in text.lower():
+
+            score += 12
+
+    # ADD POLARITY IMPACT
+    score += abs(polarity) * 40
+
+    authenticity_score = min(
+        round(score),
+        100
+    )
+
+    # AUTHENTICITY RESULT
+    if authenticity_score < 20:
+
+        authenticity = "Potential Fake"
+
+    elif authenticity_score < 50:
+
+        authenticity = "Possibly Genuine"
+
+    else:
+
+        authenticity = "Likely Genuine"
+
+    return (
+        emotion,
+        authenticity,
+        authenticity_score
+    )
+
+
+@app.route('/predict', methods=['POST'])
+def predict():
+
+    try:
+
+        data = request.json
+
+        description = data['description']
+
+        # CLEAN TEXT
+        sample_clean = [
+            clean_text(description)
+        ]
+
+        # TF-IDF VECTORIZE
+        sample_vector = tfidf.transform(
+            sample_clean
+        )
+
+        # CATEGORY PREDICTION
+        category_prediction = model.predict(
+            sample_vector
+        )
+
+        # PRIORITY PREDICTION
+        priority_prediction = modelPriority.predict(
+            sample_vector
+        )
+
+        priority = priority_prediction[0]
+
+        # DYNAMIC RISK SCORE
+        if priority == "Critical":
+
+            risk_score = random.randint(91, 100)
+
+        elif priority == "High":
+
+            risk_score = random.randint(71, 90)
+
+        elif priority == "Medium":
+
+            risk_score = random.randint(31, 70)
+
+        else:
+
+            risk_score = random.randint(1, 30)
+
+        # EMOTION + AUTHENTICITY
+        emotion, authenticity, authenticity_score = \
+            detect_emotion_and_authenticity(
+                description
+            )
+
+        # FINAL RESPONSE
+        return jsonify({
+
+            "category":
+                category_prediction[0],
+
+            "priority":
+                priority,
+
+            "risk_score":
+                risk_score,
+
+            "emotion":
+                emotion,
+
+            "authenticity":
+                authenticity,
+
+            "authenticity_score":
+                authenticity_score
+        })
+
+    except Exception as e:
+
+        return jsonify({
+
+            "error": str(e)
+
+        })
 
 
 if __name__ == "__main__":
 
     app.run(
         host="0.0.0.0",
-        port=5000,
+        port=5001,
         debug=True
     )
